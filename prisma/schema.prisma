@@ -1,0 +1,300 @@
+// AutoFlow - Prisma schema
+// Run `npm run prisma:generate` and `npm run prisma:migrate` from /server after editing.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum RoleType {
+  STUDENT
+  CORPORATE_EMPLOYEE
+  FREELANCER
+  TEACHER
+  DEVELOPER
+  CUSTOM
+}
+
+enum AppProvider {
+  GMAIL
+  GOOGLE_CALENDAR
+  TELEGRAM
+  OUTLOOK
+  WHATSAPP
+}
+
+enum ConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  MOCK
+  ERROR
+}
+
+enum TriggerType {
+  NEW_EMAIL
+  EMAIL_FROM_SENDER
+  NEW_CALENDAR_EVENT
+  SCHEDULED_TIME
+  KEYWORD_DETECTED
+}
+
+enum ConditionField {
+  SENDER
+  SUBJECT
+  KEYWORD
+  TIME
+  IMPORTANCE
+  CATEGORY
+}
+
+enum ConditionOperator {
+  EQUALS
+  CONTAINS
+  NOT_EQUALS
+  GREATER_THAN
+  LESS_THAN
+}
+
+enum ActionType {
+  CATEGORIZE_EMAIL
+  MARK_IMPORTANT
+  SEND_NOTIFICATION
+  TELEGRAM_NOTIFICATION
+  CREATE_CALENDAR_EVENT
+  AUTO_REPLY
+  ENABLE_FOCUS_MODE
+  SAVE_LOG
+}
+
+enum ExecutionStatus {
+  SUCCESS
+  FAILED
+  PARTIAL
+  SKIPPED
+}
+
+enum NotificationChannel {
+  IN_APP
+  TELEGRAM
+  EMAIL
+}
+
+enum SubscriptionPlan {
+  FREE
+  PREMIUM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+}
+
+// ---------------------------------------------------------------------------
+// Core models
+// ---------------------------------------------------------------------------
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  passwordHash   String
+  name           String
+  avatarUrl      String?
+  roleType       RoleType @default(CUSTOM)
+  onboarded      Boolean  @default(false)
+  preferences    Json?    // free-form onboarding preferences (working hours, focus habits, etc.)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  connectedApps  ConnectedApp[]
+  automations    Automation[]
+  executions     AutomationExecution[]
+  notifications  Notification[]
+  focusSessions  FocusSession[]
+  emailRules     EmailRule[]
+  subscription   Subscription?
+  activityLogs   ActivityLog[]
+
+  @@index([email])
+}
+
+model ConnectedApp {
+  id           String            @id @default(cuid())
+  userId       String
+  provider     AppProvider
+  status       ConnectionStatus  @default(MOCK)
+  accountLabel String? // e.g. "you@gmail.com" - display only, never a real credential
+  metadata     Json?
+  connectedAt  DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model Automation {
+  id           String   @id @default(cuid())
+  userId       String
+  name         String
+  description  String?
+  isEnabled    Boolean  @default(true)
+  lastExecuted DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user       User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  triggers   AutomationTrigger[]
+  conditions AutomationCondition[]
+  actions    AutomationAction[]
+  executions AutomationExecution[]
+
+  @@index([userId])
+  @@index([userId, isEnabled])
+}
+
+model AutomationTrigger {
+  id           String      @id @default(cuid())
+  automationId String
+  type         TriggerType
+  config       Json? // e.g. { "cron": "0 9 * * *" } or { "sender": "prof@uni.edu" }
+  createdAt    DateTime    @default(now())
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId])
+}
+
+model AutomationCondition {
+  id           String            @id @default(cuid())
+  automationId String
+  field        ConditionField
+  operator     ConditionOperator @default(EQUALS)
+  value        String
+  createdAt    DateTime          @default(now())
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId])
+}
+
+model AutomationAction {
+  id           String     @id @default(cuid())
+  automationId String
+  type         ActionType
+  order        Int        @default(0)
+  config       Json?
+  createdAt    DateTime   @default(now())
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId])
+}
+
+model AutomationExecution {
+  id           String          @id @default(cuid())
+  automationId String
+  userId       String
+  status       ExecutionStatus
+  triggerSnapshot Json?
+  resultSummary   String?
+  durationMs      Int?
+  createdAt    DateTime        @default(now())
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([automationId])
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id        String              @id @default(cuid())
+  userId    String
+  channel   NotificationChannel @default(IN_APP)
+  title     String
+  message   String
+  isRead    Boolean             @default(false)
+  createdAt DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}
+
+model FocusSession {
+  id        String    @id @default(cuid())
+  userId    String
+  isActive  Boolean   @default(false)
+  reason    String? // e.g. "Calendar meeting: Sprint planning"
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+}
+
+model EmailRule {
+  id        String   @id @default(cuid())
+  userId    String
+  label     String
+  matcher   Json // { sender?, subjectContains?, keyword? }
+  category  String? // e.g. "Academic", "Work", "Newsletter"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Subscription {
+  id                 String             @id @default(cuid())
+  userId             String             @unique
+  plan               SubscriptionPlan   @default(FREE)
+  status             SubscriptionStatus @default(ACTIVE)
+  currentPeriodEnd   DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String // e.g. "automation.created", "focus.enabled", "email.classified"
+  message   String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model Template {
+  id           String   @id @default(cuid())
+  name         String
+  description  String
+  roleType     RoleType @default(CUSTOM)
+  isPremium    Boolean  @default(false)
+  triggerType  TriggerType
+  triggerConfig Json?
+  conditions   Json? // array of { field, operator, value }
+  actions      Json  // array of { type, order, config }
+  createdAt    DateTime @default(now())
+
+  @@index([roleType])
+}
